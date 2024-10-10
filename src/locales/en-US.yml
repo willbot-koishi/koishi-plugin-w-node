@@ -1,0 +1,3 @@
+  commands:
+    node.list:
+      description: List all installed packages

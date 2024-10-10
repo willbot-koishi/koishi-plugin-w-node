@@ -1,0 +1,3 @@
+  commands:
+    node.list:
+      description: 列出已安装的所有包
