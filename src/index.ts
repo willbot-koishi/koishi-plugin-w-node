@@ -1,7 +1,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs/promises'
-import { execaCommand, type Options as ExecaOptions } from 'execa'
+import { type Options as ExecaOptions } from 'execa'
 
 import { Context, z, Service } from 'koishi'
 
@@ -25,9 +25,12 @@ const exists = async (path: string) => {
 
 class NodeService extends Service {
     logger = this.ctx.logger('w-node')
+
+    private execaPackage: typeof import('execa')
+
     execa = async <NewOptionsType extends ExecaOptions = {}>(command: string, options?: NewOptionsType) => {
         this.logger.info('Running $ ' + command)
-        const result = await execaCommand(command, options)
+        const result = await this.execaPackage.execaCommand(command, options)
         if (result.stdout) this.logger.info(result.stdout)
         if (result.stderr) this.logger.error(result.stderr)
         return result
@@ -43,6 +46,10 @@ class NodeService extends Service {
                 const subs = await fs.readdir(dir)
                 return `共安装了 ${subs.length} 个包：`
             })
+    }
+
+    async start() {
+        this.execaPackage = await import('execa')
     }
 
     async safeImport<T>(packageName: string): Promise<T> {
