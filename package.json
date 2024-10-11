@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-w-node",
   "description": "WillBot: .node file service",
-  "version": "0.0.3",
+  "version": "0.1.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "execa": "9.3.1",
+    "get-registry": "^1.1.0",
     "mkdirp": "^3.0.1"
   },
   "scripts": {
