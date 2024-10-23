@@ -34,15 +34,20 @@ class NodeService extends Service {
         ctx.command('node.list', '列出安装的包')
             .action(async () => {
                 const dir = this.config.packagePath
-                if (! exists(dir)) return 'Package directory '
-                const subs = await fs.readdir(dir)
-                return `共安装了 ${subs.length} 个包：${subs.map(this.unescapePackageName).join(', ')}`
+                if (! exists(dir)) return '包目录不存在'
+                const subs = await Promise.all((await fs.readdir(dir)).map(async sub => {
+                    const packageJsonPath = path.resolve(dir, sub, 'node_modules', this.unescapePackageName(sub), 'package.json')
+                    const packageJson = await fs.readFile(packageJsonPath, 'utf-8')
+                    const { name, version }: { name: string, version: string } = JSON.parse(packageJson)
+                    return `${name}@${version}`
+                }))
+                return `共安装了 ${subs.length} 个包：${subs.join(', ')}`
             })
 
-        ctx.command('node.add', '安装包', { authority: 4 })
-            .action(async (_, packageName) => {
+        ctx.command('node.add <package:string> [version:string]', '安装包', { authority: 4 })
+            .action(async (_, packageName, version) => {
                 try {
-                    await this.install(packageName)
+                    await this.install(packageName, version)
                     return '安装成功'
                 }
                 catch (err) {
@@ -59,6 +64,21 @@ class NodeService extends Service {
                 }
                 return `包 ${packageName} 不存在`
             })
+
+        ctx.command('node.debug.evalwith <package:string> <code:text>', '引入包并运行 JavaScript', { authority: 4 })
+            .option('varname', '-v <varname:string> 引入包的变量名')
+            .action(async (argv, packageName, code) => {
+                const varName = argv.options.varname || packageName.replace(/^@.*\//, '').replace(/(^(?=\d))/, '_')
+                try {
+                    const _package = await this.safeImport(packageName)
+                    const result = await eval(`const ${varName} = _package; ${code}`)
+                    return JSON.stringify(result)
+                }
+                catch (error) {
+                    return String(error)
+                }
+            })
+
     }
 
     async start() {
@@ -100,13 +120,14 @@ class NodeService extends Service {
     unescapePackageName = (escapedPackageName: string) => escapedPackageName
         .replace('at__', '@').replace('__slash__', '/')
 
-    async install(packageName: string) {
+    async install(packageName: string, version?: string) {
         const cwd = path.resolve(this.config.packagePath, this.escapePackageName(packageName))
 
         this.logger.info(`Making directory '${cwd}'.`)
         await fs.mkdir(cwd, { recursive: true })
         await fs.writeFile(path.resolve(cwd, 'package.json'), '{}')
 
+        const packageStr = `${packageName}@${version || 'latest'}`
         this.logger.info(`Installing '${packageName}'...`)
         await this.execa({ cwd })`npm add ${packageName} --color always --registry ${this.config.registry}`
 
