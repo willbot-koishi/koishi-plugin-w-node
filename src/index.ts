@@ -120,7 +120,7 @@ class NodeService extends Service {
         const cwd = path.resolve(this.config.packagePath, this.escapePackageName(packageName))
         const pkgd = path.resolve(cwd, 'node_modules', packageName)
 
-        if (forceInstall || ! await exists(pkgd)) this.install(packageName)
+        if (forceInstall || ! await exists(pkgd)) await this.install(packageName)
         else this.logger.info(`Hit cached package '${packageName}'.`)
 
         try {
