@@ -1,3 +1,45 @@
-  commands:
-    node.list:
-      description: List all installed packages
+commands:
+  node:
+    description: "Node.JS Service"
+
+  node.list:
+    description: "List all installed packages"
+    messages:
+      summary: "There are {count} packages installed."
+
+  node.install:
+    description: "Install a new package"
+    options:
+      version: "Version of the package (defaults to latest)"
+    messages:
+      success: "Installation successful"
+      failure: "Installation failed: {err}"
+
+  node.info:
+    description: "Show package information"
+    options:
+      package: "Package name"
+    messages:
+      not-exist: "Package {name} does not exist"
+
+  node.remove:
+    description: "Remove a package"
+    options:
+      package: "Package name"
+    messages:
+      success: "Removal successful"
+      not-exist: "Package {name} does not exist"
+
+  node.exec:
+    description: "Import a package and run JavaScript"
+    options:
+      package: "Package name"
+      code: "Code to run"
+      var: "Variable name for the imported package"
+      return: "Whether to return the result directly without converting to a string"
+    messages:
+      runtime-error: "Runtime error: {err}"
+
+_config:
+  packagePath: "Location to store packages"
+  registry: "NPM registry URL, defaults to the same as Koishi"

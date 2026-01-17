@@ -1,8 +1,8 @@
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs/promises'
+import vm from 'node:vm'
 
-import { type ExecaMethod } from 'execa'
 import getRegistry from 'get-registry'
 
 import { Context, z, Service } from 'koishi'
@@ -15,7 +15,7 @@ declare module 'koishi' {
   }
 }
 
-const exists = async (path: string) => {
+async function exists(path: string) {
   try {
     await fs.stat(path)
     return true
@@ -25,14 +25,26 @@ const exists = async (path: string) => {
   }
 }
 
+export interface ImportOptions {
+  allowInstall?: boolean
+}
+
+const locales = {
+  zhCN: require('./locales/zh-CN.yml'),
+  enUS: require('./locales/en-US.yml'),
+}
+
 class NodeService extends Service {
   constructor(ctx: Context, public config: NodeService.Config) {
     super(ctx, 'node')
 
-    ctx.command('node', 'Node 服务')
+    ctx.i18n.define('zh-CN', locales.zhCN)
+    ctx.i18n.define('en-US', locales.enUS)
 
-    ctx.command('node.list', '列出安装的包')
-      .action(async () => {
+    ctx.command('node')
+
+    ctx.command('node.list', { authority: 2 })
+      .action(async ({ session }) => {
         const dir = this.config.packagePath
         if (! exists(dir)) return '包目录不存在'
         const subs = await Promise.all((await fs.readdir(dir)).map(async sub => {
@@ -41,78 +53,86 @@ class NodeService extends Service {
           const { name, version }: { name: string, version: string } = JSON.parse(packageJson)
           return `${name}@${version}`
         }))
-        return `共安装了 ${subs.length} 个包：${subs.join(', ')}`
+        return session.text('.summary', { count: subs.length }) + '\n' + subs.join('\n')
       })
 
-    ctx.command('node.add <package:string> [version:string]', '安装包', { authority: 4 })
-      .action(async (_, packageName, version) => {
+    ctx.command('node.install <package:string>', { authority: 4 })
+      .option('version', '-v <version:string>')
+      .alias('node.add')
+      .action(async ({ session, options }, packageName) => {
         try {
-          await this.install(packageName, version)
-          return '安装成功'
+          await this.install(packageName, options.version)
+          return session.text('.success')
         }
         catch (err) {
-          return `安装失败：${err}`
+          return session.text('.failure', { err })
         }
       })
 
-    ctx.command('node.remove <package:string>', '移除包', { authority: 4 })
-      .action(async (_, packageName) => {
-        const cwd = path.resolve(this.config.packagePath, this.escapePackageName(packageName))
-        if (await exists(cwd)) {
-          await fs.rm(cwd, { recursive: true, force: true })
-          return '移除成功'
+    ctx.command('node.info <package:string>', { authority: 2 })
+      .action(async ({ session }, packageName) => {
+        const packageDir = this.getPackageDir(packageName)
+        if (await exists(packageDir)) {
+          const packageJsonPath = path.resolve(packageDir, 'package.json')
+          const packageJson = await fs.readFile(packageJsonPath, 'utf-8')
+          return packageJson
         }
-        return `包 ${packageName} 不存在`
+        return session.text('.not-exist', { name: packageName })
       })
 
-    ctx.command('node.debug.evalwith <package:string> <code:text>', '引入包并运行 JavaScript', { authority: 4 })
-      .option('varname', '-v <varname:string> 引入包的变量名')
+    ctx.command('node.remove <package:string>', { authority: 4 })
+      .action(async ({ session }, packageName) => {
+        const isRemoved = await this.remove(packageName)
+        return isRemoved
+          ? session.text('.success')
+          : session.text('.not-exist', { name: packageName })
+      })
+
+    ctx.command('node.exec <package:string> <code:text>', { authority: 4 })
+      .option('var', '-v <varname:string>')
+      .option('return', '-r')
       .action(async (argv, packageName, code) => {
-        const varName = argv.options.varname || packageName.replace(/^@.*\//, '').replace(/(^(?=\d))/, '_')
+        const varName = argv.options.var || 'pkg'
+        const script = new vm.Script(code)
         try {
-          const _package = await this.safeImport(packageName)
-          const result = await eval(`const ${varName} = _package; ${code}`)
-          return JSON.stringify(result)
+          const result = await script.runInNewContext({
+            [varName]: await this.import(packageName),
+          })
+          return argv.options.return ? result : String(result)
         }
-        catch (error) {
-          return String(error)
+        catch (err) {
+          return argv.session.text('.runtime-error', { err })
         }
       })
-
-  }
-
-  async start() {
-    this.execaPackage = await import('execa')
-
-    const wrapStdoutStderr = (type: 'stdout' | 'stderr') => {
-      const log = this.logger[type === 'stdout' ? 'info' : 'error']
-      return function * (line: string) {
-        log(' '.repeat('Running $ '.length) + line)
-      }
-    }
-
-    const wrapExeca = <T>(execa: ExecaMethod<T>): ExecaMethod<T> => (...p: any[]) => {
-      if (p.length > 1 && p[0] instanceof Array) this.logger.info('Running $ %s', String.raw(...p as [any]))
-      const result = execa({
-        stdout: wrapStdoutStderr('stdout'),
-        stderr: wrapStdoutStderr('stderr')
-      })(...p as [any])
-      if (typeof result === 'function') return wrapExeca(result) as any
-      return result
-    }
-
-    this.execa = wrapExeca(this.execaPackage.execa)
-
-    if (! this.config.registry) {
-      this.config.registry = await getRegistry()
-      this.ctx.scope.update(this.config)
-    }
   }
 
   logger = this.ctx.logger('w-node')
 
-  execaPackage: typeof import('execa')
-  execa: ExecaMethod<{}>
+  async start() {
+    if (! this.config.registry) {
+      this.config.registry = await getRegistry()
+      this.ctx.scope.update(this.config)
+    }
+
+    this.execaPackage = await import('execa')
+  }
+
+  private execaPackage: typeof import('execa')
+
+  get execa() {
+    const wrapStd = (type: 'out' | 'err') => {
+      const log = this.logger[type === 'out' ? 'info' : 'error']
+      return function * (line: string) {
+        log(line)
+      }
+    }
+
+    return this.execaPackage.execa({
+      verbose: 'short',
+      stdout: wrapStd('out'),
+      stderr: wrapStd('err'),
+    })
+  }
 
   escapePackageName = (packageName: string) => packageName
     .replace('/', '+')
@@ -120,40 +140,91 @@ class NodeService extends Service {
   unescapePackageName = (escapedPackageName: string) => escapedPackageName
     .replace('+', '/')
 
-  async install(packageName: string, version?: string) {
-    const cwd = path.resolve(this.config.packagePath, this.escapePackageName(packageName))
+  /**
+   * Get the root directory of a package
+   * @param packageName The name of the package
+   * @returns The root directory path of the package
+   */
+  getPackageRootDir(packageName: string) {
+    return path.resolve(this.config.packagePath, this.escapePackageName(packageName))
+  }
 
-    this.logger.info(`Making directory '${cwd}'.`)
-    await fs.mkdir(cwd, { recursive: true })
-    await fs.writeFile(path.resolve(cwd, 'package.json'), '{}')
+  /**
+   * Get the installation directory of a package
+   * @param packageName The name of the package
+   * @returns The installation directory path of the package
+   */
+  getPackageDir(packageName: string) {
+    const rootDir = this.getPackageRootDir(packageName)
+    const packageDir = path.resolve(rootDir, 'node_modules', packageName)
+    return packageDir
+  }
+
+  /**
+   * Install a package by `npm`
+   * @param packageName The name of the package
+   * @param version The version of the package, defaults to `latest`
+   */
+  async install(packageName: string, version?: string) {
+    const rootDir = this.getPackageRootDir(packageName)
+
+    this.logger.info(`Making directory '${rootDir}'.`)
+    await fs.mkdir(rootDir, { recursive: true })
+    await fs.writeFile(path.resolve(rootDir, 'package.json'), '{}')
 
     const packageStr = `${packageName}@${version || 'latest'}`
     this.logger.info(`Installing '${packageStr}'...`)
-    await this.execa({ cwd })`npm add ${packageStr} --color always --registry ${this.config.registry}`
+    await this.execa({ cwd: rootDir })`npm add ${packageStr} --color always --registry ${this.config.registry}`
 
     this.logger.info(`Installed package '${packageStr}'.`)
   }
 
-  async safeImport<T>(
-    packageName: string,
-    { maxRetry = 3, forceInstall = false }: { maxRetry?: number, forceInstall?: boolean } = {}
-  ): Promise<T> {
-    const cwd = path.resolve(this.config.packagePath, this.escapePackageName(packageName))
-    const pkgd = path.resolve(cwd, 'node_modules', packageName)
+  /**
+   * Remove a package
+   * @param packageName The name of the package
+   * @returns Fulfills with whether the package was removed
+   */
+  async remove(packageName: string): Promise<boolean> {
+    const rootDir = path.resolve(this.config.packagePath, this.escapePackageName(packageName))
+    if (! await exists(rootDir)) return false
 
-    if (forceInstall || ! await exists(pkgd)) await this.install(packageName)
-    else this.logger.info(`Hit cached package '${packageName}'.`)
+    this.logger.info(`Uninstalling '${packageName}'...`)
+    await fs.rm(rootDir, { recursive: true, force: true })
+    this.logger.info(`Uninstalled package '${packageName}'.`)
+    return true
+  }
 
-    try {
-      return require(pkgd) as T
-    }
-    catch (err) {
-      this.logger.error('Failed to require package: %o', err)
-      if (maxRetry > 0) {
-        return this.safeImport(packageName, { maxRetry: maxRetry - 1, forceInstall: true })
-      }
-      throw err
-    }
+  /**
+   * Check if a package is installed
+   * @param packageName The name of the package
+   * @returns Fulfills with whether the package is installed
+   */
+  async has(packageName: string): Promise<boolean> {
+    const packageDir = this.getPackageDir(packageName)
+    return exists(packageDir)
+  }
+
+  /**
+   * Dynamically import a package, installing it if necessary
+   * @template T The _expected_ type of the imported package
+   * @param packageName The name of the package
+   * @param options Import options, see {@link ImportOptions}
+   * @return Fulfills with the imported package
+   */
+  async import<T>(packageName: string, options: ImportOptions = {}): Promise<T> {
+    const { allowInstall = true } = options
+    const packageDir = this.getPackageDir(packageName)
+
+    if (! await exists(packageDir) && allowInstall) await this.install(packageName)
+
+    return require(packageDir) as T
+  }
+
+  /**
+   * @deprecated use `import` instead
+   */
+  async safeImport<T>(packageName: string): Promise<T> {
+    return this.import<T>(packageName)
   }
 }
 
@@ -163,16 +234,19 @@ namespace NodeService {
     registry: string
   }
 
-  export const Config: z<Config> = z.object({
-    packagePath: z
-      .string()
-      .default(path.resolve(os.tmpdir(), 'w-node'))
-      .description('存放 npm 包的位置'),
-    registry: z
-      .string()
-      .default('')
-      .description('npm 源地址，默认与当前项目相同')
-  })
+  export const Config: z<Config> = z
+    .object({
+      packagePath: z
+        .string()
+        .default('cache/node'),
+      registry: z
+        .string()
+        .default(''),
+    })
+    .i18n({
+      'zh-CN': locales.zhCN._config,
+      'en-US': locales.enUS._config,
+    })
 }
 
 export default NodeService

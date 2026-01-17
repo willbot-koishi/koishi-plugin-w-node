@@ -1,3 +1,45 @@
-  commands:
-    node.list:
-      description: 列出已安装的所有包
+commands:
+  node:
+    description: "Node.JS 服务"
+
+  node.list:
+    description: "列出已装的包"
+    messages:
+      summary: "共安装了 {count} 个包："
+
+  node.install:
+    description: "安装一个新的包"
+    options:
+      version: "包的版本（默认为 latest）"
+    messages:
+      success: "安装成功"
+      failure: "安装失败：{err}"
+
+  node.info:
+    description: "显示包的信息"
+    options:
+      package: "包名"
+    messages:
+      not-exist: "包 {name} 不存在"
+
+  node.remove:
+    description: "移除一个包"
+    options:
+      package: "包名"
+    messages:
+      success: "移除成功"
+      not-exist: "包 {name} 不存在"
+
+  node.exec:
+    description: "引入包并运行 JavaScript"
+    options:
+      package: "包名"
+      code: "要运行的代码"
+      var: "引入包的变量名"
+      return: "是否直接返回运行值而不转为字符串"
+    messages:
+      runtime-error: "运行时错误：{err}"
+
+_config:
+  packagePath: "存放包的位置"
+  registry: "NPM 源地址，默认与 Koishi 相同"
