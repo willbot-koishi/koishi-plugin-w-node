@@ -1,7 +1,8 @@
-import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import vm from 'node:vm'
+import url from 'node:url'
+import module from 'node:module'
 
 import getRegistry from 'get-registry'
 
@@ -25,8 +26,14 @@ async function exists(path: string) {
   }
 }
 
+/**
+ * Options for dynamic import
+ * @field allowInstall Whether to install the package if it is not found (default: `true`)
+ * @field useRequire Whether to use `require` instead of `import` (default: `false`)
+ */
 export interface ImportOptions {
   allowInstall?: boolean
+  useRequire?: boolean
 }
 
 const locales = {
@@ -212,19 +219,27 @@ class NodeService extends Service {
    * @return Fulfills with the imported package
    */
   async import<T>(packageName: string, options: ImportOptions = {}): Promise<T> {
-    const { allowInstall = true } = options
+    const { allowInstall = true, useRequire = false } = options
     const packageDir = this.getPackageDir(packageName)
 
     if (! await exists(packageDir) && allowInstall) await this.install(packageName)
 
-    return require(packageDir) as T
+    if (useRequire) {
+      return require(packageDir) as T
+    }
+
+    const packageHref = url.pathToFileURL(packageDir).href
+    const packageRequire = module.createRequire(packageHref)
+    const packageEntry = packageRequire.resolve(packageName)
+    const packageObject = await import(packageEntry) as T
+    return packageObject
   }
 
   /**
    * @deprecated use `import` instead
    */
-  async safeImport<T>(packageName: string): Promise<T> {
-    return this.import<T>(packageName)
+  async safeImport<T>(packageName: string, options: ImportOptions = {}): Promise<T> {
+    return this.import<T>(packageName, options)
   }
 }
 
