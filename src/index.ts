@@ -53,7 +53,7 @@ class NodeService extends Service {
     ctx.command('node.list', { authority: 2 })
       .action(async ({ session }) => {
         const dir = this.config.packagePath
-        if (! exists(dir)) return '包目录不存在'
+        if (! await exists(dir)) return '包目录不存在'
         const subs = await Promise.all((await fs.readdir(dir)).map(async sub => {
           const packageJsonPath = path.resolve(dir, sub, 'node_modules', this.unescapePackageName(sub), 'package.json')
           const packageJson = await fs.readFile(packageJsonPath, 'utf-8')
