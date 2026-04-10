@@ -6,19 +6,22 @@ commands:
     description: "列出已装的包"
     messages:
       summary: "共安装了 {count} 个包："
+      package-not-exist: "包目录不存在"
 
   node.install:
     description: "安装一个新的包"
     options:
+      package: "包名"
       version: "包的版本（默认为 latest）"
     messages:
-      success: "安装成功"
+      success: "安装成功：{version}"
       failure: "安装失败：{err}"
 
   node.info:
     description: "显示包的信息"
     options:
       package: "包名"
+      version: "包的版本（默认为 latest）"
     messages:
       not-exist: "包 {name} 不存在"
 
@@ -26,6 +29,7 @@ commands:
     description: "移除一个包"
     options:
       package: "包名"
+      version: "包的版本（默认为 *）"
     messages:
       success: "移除成功"
       not-exist: "包 {name} 不存在"
@@ -35,6 +39,7 @@ commands:
     options:
       package: "包名"
       code: "要运行的代码"
+      version: "包的版本（默认为 latest）"
       var: "引入包的变量名"
       return: "是否直接返回运行值而不转为字符串"
     messages:

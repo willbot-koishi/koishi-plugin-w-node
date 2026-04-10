@@ -5,6 +5,9 @@ import url from 'node:url'
 import module from 'node:module'
 
 import getRegistry from 'get-registry'
+import maxSatisfying from 'semver/ranges/max-satisfying'
+import satisfies from 'semver/functions/satisfies'
+import semverCompare from 'semver/functions/compare'
 
 import { Context, z, Service } from 'koishi'
 
@@ -30,13 +33,22 @@ async function exists(path: string) {
  * Options for dynamic import
  * @field allowInstall Whether to install the package if it is not found (default: `true`)
  * @field useRequire Whether to use `require` instead of `import` (default: `false`)
+ * @field version The version of the package (default: `latest`)
  */
 export interface ImportOptions {
   allowInstall?: boolean
   useRequire?: boolean
+  version?: string | 'latest'
 }
 
-const locales = {
+export interface VersionDir {
+  version: string
+  path: string
+}
+
+const isKoishi = ("," + Object.keys(process.env).join(",").toLowerCase()).includes(",koishi")
+
+const locales = !isKoishi ? {} : {
   zhCN: require('./locales/zh-CN.yml'),
   enUS: require('./locales/en-US.yml'),
 }
@@ -50,75 +62,102 @@ class NodeService extends Service {
 
     ctx.command('node')
 
-    ctx.command('node.list', { authority: 2 })
-      .action(async ({ session }) => {
-        const dir = this.config.packagePath
-        if (! exists(dir)) return '包目录不存在'
-        const subs = await Promise.all((await fs.readdir(dir)).map(async sub => {
-          const packageJsonPath = path.resolve(dir, sub, 'node_modules', this.unescapePackageName(sub), 'package.json')
-          const packageJson = await fs.readFile(packageJsonPath, 'utf-8')
-          const { name, version }: { name: string, version: string } = JSON.parse(packageJson)
-          return `${name}@${version}`
-        }))
-        return session.text('.summary', { count: subs.length }) + '\n' + subs.join('\n')
-      })
+    ctx.command("node.list", {authority: 2})
+      .action(async ({session}) => {
+        const dir = this.config.packagePath;
+        if (!(await exists(dir))) return session.text(".package-not-exist");
+        const subs = (await fs.readdir(dir, {withFileTypes: true}))
+          .filter((d) => d.isDirectory())
+          .map((dir) => {
+            const index = dir.name.lastIndexOf(this.versionDelimiter);
+            const name = dir.name.slice(0, index);
+            const version = dir.name.slice(index + this.versionDelimiter.length);
+            return [this.unescapePackageName(name), version];
+          })
+          .sort((a, b) => {
+           const d =  a[0].localeCompare(b[0])
+            if (d !== 0) {
+              return d
+            }
+            return semverCompare(b[1], a[1], {loose: true})
+          })
+          .map((d) => d[0] + '@' + d[1]);
+        return session.text(".summary", {count: subs.length}) + "\n" + subs.join("\n");
+      });
 
     ctx.command('node.install <package:string>', { authority: 4 })
       .option('version', '-v <version:string>')
       .alias('node.add')
       .action(async ({ session, options }, packageName) => {
         try {
-          await this.install(packageName, options.version)
-          return session.text('.success')
+          const version = await this.install(packageName, options.version)
+          return session.text('.success', {version})
         }
         catch (err) {
-          return session.text('.failure', { err })
+          return session.text('.failure', {err: err?.stack || String(err)})
         }
       })
 
     ctx.command('node.info <package:string>', { authority: 2 })
-      .action(async ({ session }, packageName) => {
-        const packageDir = this.getPackageDir(packageName)
-        if (await exists(packageDir)) {
-          const packageJsonPath = path.resolve(packageDir, 'package.json')
-          const packageJson = await fs.readFile(packageJsonPath, 'utf-8')
-          return packageJson
+      .option('version', '-v <version:string>')
+      .action(async ({ session, options }, packageName) => {
+        const version =  await this.maxSatisfyingForPackageInstalled(packageName, options.version, true)
+        if(!version){
+          return session.text('.not-exist', { name: packageName })
         }
-        return session.text('.not-exist', { name: packageName })
+        const packageJsonPath = path.resolve(this.buildPackageVersionDir(packageName, version), "package.json");
+        const packageJson = await fs.readFile(packageJsonPath, "utf-8");
+        return packageJson;
       })
 
     ctx.command('node.remove <package:string>', { authority: 4 })
-      .action(async ({ session }, packageName) => {
-        const isRemoved = await this.remove(packageName)
+      .option('version', '-v <version:string>')
+      .action(async ({ session, options }, packageName) => {
+        const isRemoved = await this.remove(packageName, options.version)
         return isRemoved
           ? session.text('.success')
-          : session.text('.not-exist', { name: packageName })
+          : session.text('.not-exist', {name: packageName + (options.version ? '@' + options.version : '')})
       })
 
     ctx.command('node.exec <package:string> <code:text>', { authority: 4 })
+      .option('version', '--ver <version:string>')
       .option('var', '-v <varname:string>')
       .option('return', '-r')
-      .action(async (argv, packageName, code) => {
-        const varName = argv.options.var || 'pkg'
+      .action(async ({ session, options }, packageName, code) => {
+        const varName = options.var || 'pkg'
         const script = new vm.Script(code)
         try {
           const result = await script.runInNewContext({
-            [varName]: await this.import(packageName),
-          })
-          return argv.options.return ? result : String(result)
-        }
-        catch (err) {
-          return argv.session.text('.runtime-error', { err })
+            [varName]: await this.import(packageName, {version: options.version}),
+          })()
+          return options.return ? result : String(result)
+        } catch (err) {
+          return session.text('.runtime-error', {err: err?.stack || String(err)})
         }
       })
   }
 
   logger = this.ctx.logger('w-node')
+  readonly versionDelimiter = "@"
 
   async start() {
-    if (! this.config.registry) {
-      this.config.registry = await getRegistry()
-      this.ctx.scope.update(this.config)
+
+    if (!this.config.registry) {
+      let registry: string;
+      for (const group of Object.values(this.ctx.root.config?.plugins || {})) {
+        const market = Object.entries(group).find((e) =>
+          e[0]?.startsWith?.("market:"),
+        );
+        if (market) {
+          registry = market[1]?.["registry"]?.["endpoint"];
+          break;
+        }
+      }
+      if (!registry) {
+        registry = await getRegistry();
+      }
+      this.config.registry = registry;
+      this.ctx.scope.update(this.config);
     }
 
     this.execaPackage = await import('execa')
@@ -148,55 +187,128 @@ class NodeService extends Service {
     .replace('+', '/')
 
   /**
-   * Get the root directory of a package
+   * build the root directory of a package
    * @param packageName The name of the package
+   * @param version The version of the package
    * @returns The root directory path of the package
    */
-  getPackageRootDir(packageName: string) {
-    return path.resolve(this.config.packagePath, this.escapePackageName(packageName))
+  buildPackageVersionRootDir(packageName: string, version: string) {
+    const packageDir = path.resolve(
+      this.config.packagePath,
+      this.escapePackageName(packageName) + this.versionDelimiter + version,
+    );
+    return packageDir;
   }
 
   /**
-   * Get the installation directory of a package
+   * build the root directory of a package
    * @param packageName The name of the package
-   * @returns The installation directory path of the package
+   * @param version The version of the package
+   * @returns The root directory path of the package
    */
-  getPackageDir(packageName: string) {
-    const rootDir = this.getPackageRootDir(packageName)
+  buildPackageVersionDir(packageName: string, version: string) {
+    const rootDir = this.buildPackageVersionRootDir(packageName, version)
     const packageDir = path.resolve(rootDir, 'node_modules', packageName)
     return packageDir
+  }
+
+  /**
+   * Get for all installed versions of the package
+   * @param packageName The name of the package
+   * @returns for all installed versions of the package
+   */
+  async getAllInstalledVersionsOfPackage(packageName: string) {
+    const versionDirs: VersionDir[] = [];
+    if (!(await exists(this.config.packagePath))) {
+      return versionDirs;
+    }
+    const prefix = this.escapePackageName(packageName) + this.versionDelimiter;
+    const files = await fs.readdir(this.config.packagePath, {
+      withFileTypes: true,
+    });
+    files
+      .filter((file) => file.isDirectory() && file.name.startsWith(prefix))
+      .forEach((file) =>
+        versionDirs.push({
+          version: file.name.replace(prefix, ""),
+          path: path.join(file.parentPath, file.name, path.sep),
+        }),
+      );
+    return versionDirs;
+  }
+
+  /**
+   * Find for installed versions of the package
+   * @param packageName The name of the package
+   * @param versionRange The version of the package, defaults to `*`
+   * @param includePrerelease include prerelease
+   * @returns installed versions of the package
+   */
+  async maxSatisfyingForPackageInstalled(packageName: string, versionRange: string = '*', includePrerelease: boolean = false) {
+    if (versionRange === 'latest') versionRange = '*';
+    const versionDirs = await this.getAllInstalledVersionsOfPackage(packageName);
+    const version = maxSatisfying(
+      versionDirs.map(vd => vd.version),
+      versionRange, {loose: true, includePrerelease}
+    );
+    return version
   }
 
   /**
    * Install a package by `npm`
    * @param packageName The name of the package
    * @param version The version of the package, defaults to `latest`
+   * @return package installed version
    */
-  async install(packageName: string, version?: string) {
-    const rootDir = this.getPackageRootDir(packageName)
+  async install(packageName: string, version: string | 'latest' = 'latest') {
+    let versions: string[];
+    try {
+      const res = (await this.execaPackage.execa
+        `npm view ${packageName}@${version} version --json --registry ${this.config.registry}`);
+      versions = JSON.parse(res.stdout);
+      if (typeof versions === 'string') {
+        versions = [versions]
+      }
+    } catch (e) {
+      this.logger.error(e);
+      return null;
+    }
+
+    const targetVersion = maxSatisfying(versions, '*', {loose: true, includePrerelease: true})?.toString();
+    if (!targetVersion) {
+      this.logger.error(`Invalid version: ${version}`);
+      return null;
+    }
+
+    const rootDir = this.buildPackageVersionRootDir(packageName, targetVersion)
 
     this.logger.info(`Making directory '${rootDir}'.`)
-    await fs.mkdir(rootDir, { recursive: true })
+    await fs.mkdir(rootDir, {recursive: true})
     await fs.writeFile(path.resolve(rootDir, 'package.json'), '{}')
 
-    const packageStr = `${packageName}@${version || 'latest'}`
+    const packageStr = `${packageName}@${targetVersion}`
     this.logger.info(`Installing '${packageStr}'...`)
-    await this.execa({ cwd: rootDir })`npm add ${packageStr} --color always --registry ${this.config.registry}`
+    await this.execa({cwd: rootDir})`npm add ${packageStr} --color always --registry ${this.config.registry}`
 
     this.logger.info(`Installed package '${packageStr}'.`)
+
+    return targetVersion;
   }
 
   /**
    * Remove a package
    * @param packageName The name of the package
+   * @param versionRange The version range of the package, defaults `*`
    * @returns Fulfills with whether the package was removed
    */
-  async remove(packageName: string): Promise<boolean> {
-    const rootDir = path.resolve(this.config.packagePath, this.escapePackageName(packageName))
-    if (! await exists(rootDir)) return false
+  async remove(packageName: string, versionRange: string  = "*"): Promise<boolean> {
+    let versionDirs = await this.getAllInstalledVersionsOfPackage(packageName);
+    versionDirs = versionDirs.filter(vd => satisfies(vd.version, versionRange, {loose: true, includePrerelease: true}));
+    if (versionDirs.length === 0) return false
 
-    this.logger.info(`Uninstalling '${packageName}'...`)
-    await fs.rm(rootDir, { recursive: true, force: true })
+    const versionMsg = versionDirs.map(vd=>vd.version).join(', ')
+    this.logger.info(`Uninstalling '${packageName}' range from '${versionRange}' target: ${versionMsg}`)
+    await Promise.all(versionDirs.map(vd => fs.rm(vd.path, {recursive: true, force: true})))
     this.logger.info(`Uninstalled package '${packageName}'.`)
     return true
   }
@@ -204,11 +316,12 @@ class NodeService extends Service {
   /**
    * Check if a package is installed
    * @param packageName The name of the package
+   * @param versionRange The version range of the package, defaults `*`
    * @returns Fulfills with whether the package is installed
    */
-  async has(packageName: string): Promise<boolean> {
-    const packageDir = this.getPackageDir(packageName)
-    return exists(packageDir)
+  async has(packageName: string, versionRange: string = "*"): Promise<boolean> {
+    const versionDirs = await this.getAllInstalledVersionsOfPackage(packageName);
+    return versionDirs.some(vd => satisfies(vd.version, versionRange, {loose: true, includePrerelease: true}));
   }
 
   /**
@@ -219,10 +332,20 @@ class NodeService extends Service {
    * @return Fulfills with the imported package
    */
   async import<T>(packageName: string, options: ImportOptions = {}): Promise<T> {
-    const { allowInstall = true, useRequire = false } = options
-    const packageDir = this.getPackageDir(packageName)
+    const {allowInstall = true, useRequire = false, version = 'latest'} = options
 
-    if (! await exists(packageDir) && allowInstall) await this.install(packageName)
+    let targetVersion = await this.maxSatisfyingForPackageInstalled(packageName, version, true);
+
+    if (!targetVersion) {
+      if (allowInstall) {
+        targetVersion = await this.install(packageName, version);
+      } else {
+        this.logger.error(`Package not installed: ${packageName}@${version}`);
+        return null;
+      }
+    }
+
+    const packageDir = this.buildPackageVersionDir(packageName, targetVersion);
 
     if (useRequire) {
       return require(packageDir) as T
@@ -231,7 +354,7 @@ class NodeService extends Service {
     const packageHref = url.pathToFileURL(packageDir).href
     const packageRequire = module.createRequire(packageHref)
     const packageEntry = packageRequire.resolve(packageName)
-    const packageObject = await import(packageEntry) as T
+    const packageObject = await import(url.pathToFileURL(packageEntry).href) as T
     return packageObject
   }
 
@@ -259,8 +382,8 @@ namespace NodeService {
         .default(''),
     })
     .i18n({
-      'zh-CN': locales.zhCN._config,
-      'en-US': locales.enUS._config,
+      'zh-CN': locales.zhCN?._config,
+      'en-US': locales.enUS?._config,
     })
 }
 

@@ -6,19 +6,22 @@ commands:
     description: "List all installed packages"
     messages:
       summary: "There are {count} packages installed."
+      package-not-exist: "Package directory does not exist"
 
   node.install:
     description: "Install a new package"
     options:
+      package: "Package name"
       version: "Version of the package (defaults to latest)"
     messages:
-      success: "Installation successful"
+      success: "Installation successful: {version}"
       failure: "Installation failed: {err}"
 
   node.info:
     description: "Show package information"
     options:
       package: "Package name"
+      version: "Version of the package (defaults to latest)"
     messages:
       not-exist: "Package {name} does not exist"
 
@@ -26,6 +29,7 @@ commands:
     description: "Remove a package"
     options:
       package: "Package name"
+      version: "Version of the package (defaults to *)"
     messages:
       success: "Removal successful"
       not-exist: "Package {name} does not exist"
@@ -35,6 +39,7 @@ commands:
     options:
       package: "Package name"
       code: "Code to run"
+      version: "Version of the package (defaults to latest)"
       var: "Variable name for the imported package"
       return: "Whether to return the result directly without converting to a string"
     messages:
