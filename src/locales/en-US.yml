@@ -40,7 +40,7 @@ commands:
       package: "Package name"
       code: "Code to run"
       version: "Version of the package (defaults to latest)"
-      var: "Variable name for the imported package"
+      as: "Variable name for the imported package"
       return: "Whether to return the result directly without converting to a string"
     messages:
       runtime-error: "Runtime error: {err}"

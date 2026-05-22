@@ -40,7 +40,7 @@ commands:
       package: "包名"
       code: "要运行的代码"
       version: "包的版本（默认为 latest）"
-      var: "引入包的变量名"
+      as: "引入包的变量名"
       return: "是否直接返回运行值而不转为字符串"
     messages:
       runtime-error: "运行时错误：{err}"
