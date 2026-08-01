@@ -93,7 +93,7 @@ class NodeService extends Service {
         const isRemoved = await this.remove(packageName, options.version)
         return isRemoved
           ? session.text('.success')
-          : session.text('.not-exist', { name: packageName + (options.version ? '`@${options.version}`' : '') })
+          : session.text('.not-exist', { name: packageName + (options.version ? `@${options.version}` : '') })
       })
 
     ctx.command('node.exec <package:string> <code:text>', { authority: 4 })
@@ -332,6 +332,12 @@ class NodeService extends Service {
 }
 
 namespace NodeService {
+  export const inject = {
+    installer: {
+      required: false,
+    },
+  }
+
   export interface Config {
     packagePath: string
     registry: string

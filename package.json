@@ -18,6 +18,9 @@
     "service": {
       "implements": [
         "node"
+      ],
+      "optional": [
+        "installer"
       ]
     }
   },
@@ -35,7 +38,8 @@
     "bump": "yarn workspace willbot bump w-node",
     "pub": "yarn workspace willbot pub w-node",
     "lint": "eslint",
-    "lint:fix": "eslint --fix"
+    "lint:fix": "eslint --fix",
+    "test": "npx tsx -r yml-register --test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
