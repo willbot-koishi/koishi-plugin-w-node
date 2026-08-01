@@ -252,11 +252,15 @@ class NodeService extends Service {
 
     const packageStr = `${packageName}@${targetVersion}`
     this.logger.info(`Installing '${packageStr}'...`)
-    await this.execa({ cwd: rootDir })`npm add ${packageStr} --color always --registry ${this.config.registry}`
-
-    this.logger.info(`Installed package '${packageStr}'.`)
-
-    return targetVersion
+    try {
+      await this.execa({ cwd: rootDir })`npm add ${packageStr} --color always --registry ${this.config.registry}`
+      this.logger.info(`Installed package '${packageStr}'.`)
+      return targetVersion
+    }
+    catch (e) {
+      await fs.rm(rootDir, { recursive: true, force: true })
+      throw e
+    }
   }
 
   /**
@@ -319,7 +323,11 @@ class NodeService extends Service {
     const packageHref = url.pathToFileURL(packageDir).href
     const packageRequire = module.createRequire(packageHref)
     const packageEntry = packageRequire.resolve(packageName)
-    const packageObject = await import(url.pathToFileURL(packageEntry).href) as T
+    const packageEntryHref = url.pathToFileURL(packageEntry).href
+    if (! packageEntryHref.startsWith(packageHref)) {
+      return null
+    }
+    const packageObject = await import(packageEntryHref) as T
     return packageObject
   }
 
