@@ -19,7 +19,7 @@
       "implements": [
         "node"
       ],
-      "optional": [
+      "required": [
         "installer"
       ]
     }

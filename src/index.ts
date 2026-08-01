@@ -342,7 +342,7 @@ class NodeService extends Service {
 namespace NodeService {
   export const inject = {
     installer: {
-      required: false,
+      required: true,
     },
   }
 
