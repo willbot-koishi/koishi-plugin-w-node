@@ -48,3 +48,4 @@ commands:
 _config:
   packagePath: "存放包的位置"
   registry: "NPM 源地址，默认与 Koishi 相同"
+  packageIdleTimeout: "超过此时长未使用的包将自动清理（天）"
