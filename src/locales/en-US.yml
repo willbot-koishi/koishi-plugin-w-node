@@ -48,3 +48,4 @@ commands:
 _config:
   packagePath: "Location to store packages"
   registry: "NPM registry URL, defaults to the same as Koishi"
+  packageIdleTimeout: "Packages that have not been used for more than this period of time will be automatically deleted (days)"

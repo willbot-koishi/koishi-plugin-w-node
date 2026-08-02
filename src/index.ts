@@ -112,6 +112,11 @@ class NodeService extends Service {
           return session.text('.runtime-error', { err: err?.stack || String(err) })
         }
       })
+
+    const dayTime = 24 * 60 * 60 * 1000
+    ctx.setInterval(() => {
+      this.removeUnaccessed(this.config.packageIdleTimeout * dayTime).then()
+    }, dayTime)
   }
 
   logger = this.ctx.logger('w-node')
@@ -316,18 +321,26 @@ class NodeService extends Service {
 
     const packageDir = this.buildPackageDir(packageName, targetVersion)
 
+    let packageObject: T = null
+
     if (useRequire) {
-      return require(packageDir) as T
+      packageObject = require(packageDir) as T
+    }
+    else {
+      const packageHref = url.pathToFileURL(packageDir).href
+      const packageRequire = module.createRequire(packageHref)
+      const packageEntry = packageRequire.resolve(packageName)
+      const packageEntryHref = url.pathToFileURL(packageEntry).href
+      if (packageEntryHref.startsWith(packageHref)) {
+        packageObject = await import(packageEntryHref) as T
+      }
     }
 
-    const packageHref = url.pathToFileURL(packageDir).href
-    const packageRequire = module.createRequire(packageHref)
-    const packageEntry = packageRequire.resolve(packageName)
-    const packageEntryHref = url.pathToFileURL(packageEntry).href
-    if (! packageEntryHref.startsWith(packageHref)) {
-      return null
+    if (packageObject !== null) {
+      const now = new Date()
+      await fs.utimes(this.buildPackageRootDir(packageName, targetVersion), now, now)
     }
-    const packageObject = await import(packageEntryHref) as T
+
     return packageObject
   }
 
@@ -336,6 +349,35 @@ class NodeService extends Service {
    */
   async safeImport<T>(packageName: string, options: ImportOptions = {}): Promise<T> {
     return this.import<T>(packageName, options)
+  }
+
+  /**
+   * Remove unaccessed package
+   * @param idleTimeout Package that remain unaccessed for this duration will be removed, in milliseconds
+   */
+  async removeUnaccessed(idleTimeout: number) {
+    if (! (await exists(this.config.packagePath))) {
+      return []
+    }
+    let files = await fs.readdir(this.config.packagePath, {
+      withFileTypes: true,
+    })
+    files = files
+      .filter(file => file.isDirectory())
+    const now = Date.now()
+    const rmPaths: string[] = []
+    for (const file of files) {
+      const dirPath = path.join(file.parentPath, file.name)
+      const stat = await fs.stat(dirPath)
+      if (now - stat.mtimeMs > idleTimeout) {
+        rmPaths.push(dirPath)
+      }
+    }
+    if (! rmPaths.length) {
+      return
+    }
+    await Promise.allSettled(rmPaths.map(path => fs.rm(path, { recursive: true, force: true })))
+    this.logger.info(`Remove ${rmPaths.length} unaccessed package.`)
   }
 }
 
@@ -349,6 +391,7 @@ namespace NodeService {
   export interface Config {
     packagePath: string
     registry: string
+    packageIdleTimeout: number
   }
 
   export const Config: z<Config> = z
@@ -359,6 +402,10 @@ namespace NodeService {
       registry: z
         .string()
         .default(''),
+      packageIdleTimeout: z
+        .number()
+        .min(1)
+        .default(7),
     })
     .i18n({
       'zh-CN': locales.zhCN._config,

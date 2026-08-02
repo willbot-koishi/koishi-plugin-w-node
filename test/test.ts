@@ -1,19 +1,25 @@
-import { it, before } from 'node:test'
+import { it, before, after } from 'node:test'
+import { setTimeout as wait } from 'node:timers/promises'
 import assert from 'node:assert/strict'
 
 import { Context } from 'koishi'
 import MOCK from '@koishijs/plugin-mock'
+import HTTP from '@cordisjs/plugin-http'
+import { Installer } from '@koishijs/plugin-market'
 import NodeService from '../src'
 
 import * as semver from 'semver'
 
 const app = new Context()
 
+app.plugin(HTTP)
+app.plugin(Installer, { endpoint: 'https://registry.npmmirror.com/' })
 app.plugin(NodeService)
 app.plugin(MOCK)
 const client = app.mock.client('123')
 
 before(() => app.start())
+after(() => app.stop())
 
 const p = 'semver'
 it('w-node service', async (t) => {
@@ -96,4 +102,17 @@ it('w-node cmd', async (t) => {
   await t.test('remove', async () => {
     await client.shouldReply(`node.remove ${p}`, '移除成功')
   })
+})
+
+it('w-node clean', async () => {
+  await app.node.install(p, '7.8.5')
+  await app.node.install(p, '6.1.3')
+  await wait(3000)
+  await app.node.import(p, { version: '6.1.3' })
+  await app.node.removeUnaccessed(2000)
+  const res6 = await app.node.has(p, '6.1.3')
+  const res7 = await app.node.has(p, '7.8.5')
+  await app.node.remove(p)
+  assert.ok(res6)
+  assert.ok(! res7)
 })
