@@ -2,7 +2,7 @@ import { it, before, after } from 'node:test'
 import { setTimeout as wait } from 'node:timers/promises'
 import assert from 'node:assert/strict'
 
-import { Context } from 'koishi'
+import { Context, type Plugin } from 'koishi'
 import Mock from '@koishijs/plugin-mock'
 import Http from '@cordisjs/plugin-http'
 import { Installer } from '@koishijs/plugin-market'
@@ -15,8 +15,8 @@ const app = new Context()
 app.plugin(Http)
 app.plugin(Installer, { endpoint: 'https://registry.npmmirror.com/' })
 app.plugin(NodeService)
-const mock = app.plugin(Mock)
-const client = app.mock.client('123')
+const mock = app.plugin(Mock as Plugin.Constructor)
+const client = app.mock.client('mock')
 
 before(() => app.start())
 after(async () => {
