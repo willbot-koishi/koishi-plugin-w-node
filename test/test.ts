@@ -3,8 +3,8 @@ import { setTimeout as wait } from 'node:timers/promises'
 import assert from 'node:assert/strict'
 
 import { Context } from 'koishi'
-import MOCK from '@koishijs/plugin-mock'
-import HTTP from '@cordisjs/plugin-http'
+import Mock from '@koishijs/plugin-mock'
+import Http from '@cordisjs/plugin-http'
 import { Installer } from '@koishijs/plugin-market'
 import NodeService from '../src'
 
@@ -12,14 +12,17 @@ import * as semver from 'semver'
 
 const app = new Context()
 
-app.plugin(HTTP)
+app.plugin(Http)
 app.plugin(Installer, { endpoint: 'https://registry.npmmirror.com/' })
 app.plugin(NodeService)
-app.plugin(MOCK)
+const mock = app.plugin(Mock)
 const client = app.mock.client('123')
 
 before(() => app.start())
-after(() => app.stop())
+after(async () => {
+  mock.dispose()
+  await app.stop()
+})
 
 const p = 'semver'
 it('w-node service', async (t) => {

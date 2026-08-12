@@ -12,6 +12,8 @@ import { Context, z, Service } from 'koishi'
 import {} from '@koishijs/plugin-market'
 
 import { exists, PackageInfo, VERSION_SYMBOL } from './utils'
+import enUS from './locales/en-US.yml'
+import zhCN from './locales/zh-CN.yml'
 
 declare module 'koishi' {
   interface Context {
@@ -32,8 +34,8 @@ export interface ImportOptions {
 }
 
 const locales = {
-  zhCN: require('./locales/zh-CN.yml'),
-  enUS: require('./locales/en-US.yml'),
+  zhCN,
+  enUS,
 }
 
 class NodeService extends Service {
