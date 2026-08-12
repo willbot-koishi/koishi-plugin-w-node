@@ -117,7 +117,9 @@ class NodeService extends Service {
 
     const dayTime = 24 * 60 * 60 * 1000
     ctx.setInterval(() => {
-      this.removeUnaccessed(this.config.packageIdleTimeout * dayTime).then()
+      void this.removeUnaccessed(this.config.packageIdleTimeout * dayTime).catch((error) => {
+        this.logger.error('Failed to clean up idle packages: %o', error)
+      })
     }, dayTime)
   }
 
@@ -378,8 +380,17 @@ class NodeService extends Service {
     if (! rmPaths.length) {
       return
     }
-    await Promise.allSettled(rmPaths.map(path => fs.rm(path, { recursive: true, force: true })))
-    this.logger.info(`Remove ${rmPaths.length} unaccessed package.`)
+    const results = await Promise.allSettled(rmPaths.map(path => fs.rm(path, { recursive: true, force: true })))
+    let removedCount = 0
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        removedCount += 1
+      }
+      else {
+        this.logger.warn(`Failed to remove idle package '${rmPaths[index]}': %o`, result.reason)
+      }
+    })
+    this.logger.info(`Removed ${removedCount} idle package(s).`)
   }
 }
 
