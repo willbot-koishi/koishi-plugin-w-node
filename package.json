@@ -33,10 +33,10 @@
     "semver": "^7.7.4"
   },
   "scripts": {
-    "build": "yarn workspace willbot build w-node",
+    "build": "yarn run -T build w-node",
     "yakumo:before:pub": "yarn build",
-    "bump": "yarn workspace willbot bump w-node",
-    "pub": "yarn workspace willbot pub w-node",
+    "bump": "yarn run -T bump w-node",
+    "pub": "yarn run -T pub w-node",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
     "test": "tsx -r yml-register --test"
