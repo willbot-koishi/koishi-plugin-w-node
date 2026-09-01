@@ -5,7 +5,6 @@ import assert from 'node:assert/strict'
 import { Context, type Plugin } from 'koishi'
 import Mock from '@koishijs/plugin-mock'
 import Http from '@cordisjs/plugin-http'
-import { Installer } from '@koishijs/plugin-market'
 import NodeService from '../src'
 
 import * as semver from 'semver'
@@ -13,7 +12,6 @@ import * as semver from 'semver'
 const app = new Context()
 
 app.plugin(Http)
-app.plugin(Installer, { endpoint: 'https://registry.npmmirror.com/' })
 app.plugin(NodeService)
 const mock = app.plugin(Mock as Plugin.Constructor)
 const client = app.mock.client('mock')
