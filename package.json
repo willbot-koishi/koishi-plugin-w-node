@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-w-node",
   "description": "WillBot: .node file service",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -18,9 +18,6 @@
     "service": {
       "implements": [
         "node"
-      ],
-      "required": [
-        "installer"
       ]
     }
   },
@@ -44,7 +41,6 @@
   "devDependencies": {
     "@cordisjs/plugin-http": "^0.6.3",
     "@eslint/js": "^10.0.1",
-    "@koishijs/plugin-market": "^2.11.11",
     "@koishijs/plugin-mock": "^2.6.6",
     "@stylistic/eslint-plugin": "^5.10.0",
     "@types/node": "^25.6.0",

@@ -9,7 +9,6 @@ import maxSatisfying from 'semver/ranges/max-satisfying'
 import satisfies from 'semver/functions/satisfies'
 
 import { Context, z, Service } from 'koishi'
-import {} from '@koishijs/plugin-market'
 
 import { exists, PackageInfo, VERSION_SYMBOL } from './utils'
 import enUS from './locales/en-US.yml'
@@ -126,7 +125,16 @@ class NodeService extends Service {
   logger = this.ctx.logger('w-node')
 
   async getRegistry(): Promise<string> {
-    const marketRegistry = this.ctx.installer?.config.endpoint
+    let marketRegistry: string
+    for (const group of Object.values(this.ctx.root.config?.plugins || {})) {
+      const market = Object.entries(group).find(e =>
+        e[0]?.startsWith?.('market:'),
+      )
+      if (market) {
+        marketRegistry = market[1]?.['registry']?.['endpoint']
+        break
+      }
+    }
     return marketRegistry ?? await getPMRegistry()
   }
 
@@ -395,12 +403,6 @@ class NodeService extends Service {
 }
 
 namespace NodeService {
-  export const inject = {
-    installer: {
-      required: true,
-    },
-  }
-
   export interface Config {
     packagePath: string
     registry: string
