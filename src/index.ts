@@ -10,7 +10,7 @@ import satisfies from 'semver/functions/satisfies'
 
 import { Context, z, Service } from 'koishi'
 
-import { exists, PackageInfo, VERSION_SYMBOL } from './utils'
+import { exists, PackageInfo, ReadWriteLock, VERSION_SYMBOL } from './utils'
 import enUS from './locales/en-US.yml'
 import zhCN from './locales/zh-CN.yml'
 
@@ -123,6 +123,7 @@ class NodeService extends Service {
   }
 
   logger = this.ctx.logger('w-node')
+  rmLock = new ReadWriteLock()
 
   async getRegistry(): Promise<string> {
     let marketRegistry: string
@@ -241,43 +242,45 @@ class NodeService extends Service {
    * @param version The version of the package, defaults to `latest`
    * @return package installed version
    */
-  async install(packageName: string, version: string | 'latest' = 'latest') {
-    let versions: string[]
-    try {
-      const res = (await this.execaPackage.execa`npm view ${packageName}@${version} version --json --registry ${this.config.registry}`)
-      versions = JSON.parse(res.stdout)
-      if (typeof versions === 'string') {
-        versions = [versions]
+  async install(packageName: string, version: string | 'latest' = 'latest'): Promise<string> {
+    return this.rmLock.r(async () => {
+      let versions: string[]
+      try {
+        const res = (await this.execaPackage.execa`npm view ${packageName}@${version} version --json --registry ${this.config.registry}`)
+        versions = JSON.parse(res.stdout)
+        if (typeof versions === 'string') {
+          versions = [versions]
+        }
       }
-    }
-    catch (err) {
-      this.logger.error(err)
-      return null
-    }
+      catch (err) {
+        this.logger.error(err)
+        return null
+      }
 
-    const targetVersion = maxSatisfying(versions, '*', { loose: true, includePrerelease: true })?.toString()
-    if (! targetVersion) {
-      this.logger.error(`Invalid version: ${version}`)
-      return null
-    }
+      const targetVersion = maxSatisfying(versions, '*', { loose: true, includePrerelease: true })?.toString()
+      if (! targetVersion) {
+        this.logger.error(`Invalid version: ${version}`)
+        return null
+      }
 
-    const rootDir = this.buildPackageRootDir(packageName, targetVersion)
+      const rootDir = this.buildPackageRootDir(packageName, targetVersion)
 
-    this.logger.info(`Making directory '${rootDir}'.`)
-    await fs.mkdir(rootDir, { recursive: true })
-    await fs.writeFile(path.resolve(rootDir, 'package.json'), '{}')
+      this.logger.info(`Making directory '${rootDir}'.`)
+      await fs.mkdir(rootDir, { recursive: true })
+      await fs.writeFile(path.resolve(rootDir, 'package.json'), '{}')
 
-    const packageStr = `${packageName}@${targetVersion}`
-    this.logger.info(`Installing '${packageStr}'...`)
-    try {
-      await this.execa({ cwd: rootDir })`npm add ${packageStr} --color always --registry ${this.config.registry}`
-      this.logger.info(`Installed package '${packageStr}'.`)
-      return targetVersion
-    }
-    catch (e) {
-      await fs.rm(rootDir, { recursive: true, force: true })
-      throw e
-    }
+      const packageStr = `${packageName}@${targetVersion}`
+      this.logger.info(`Installing '${packageStr}'...`)
+      try {
+        await this.execa({ cwd: rootDir })`npm add ${packageStr} --color always --registry ${this.config.registry}`
+        this.logger.info(`Installed package '${packageStr}'.`)
+        return targetVersion
+      }
+      catch (e) {
+        await fs.rm(rootDir, { recursive: true, force: true })
+        throw e
+      }
+    })
   }
 
   /**
@@ -287,15 +290,20 @@ class NodeService extends Service {
    * @returns Fulfills with whether the package was removed
    */
   async remove(packageName: string, versionRange: string = '*'): Promise<boolean> {
-    let versionDirs = await this.listVersionDirs(packageName)
-    versionDirs = versionDirs.filter(vd => satisfies(vd.version, versionRange, { loose: true, includePrerelease: true }))
-    if (! versionDirs.length) return false
+    return this.rmLock.w(async () => {
+      let versionDirs = await this.listVersionDirs(packageName)
+      versionDirs = versionDirs.filter(vd => satisfies(vd.version, versionRange, {
+        loose: true,
+        includePrerelease: true,
+      }))
+      if (! versionDirs.length) return false
 
-    const versionMsg = versionDirs.map(vd => vd.version).join(', ')
-    this.logger.info(`Uninstalling '${packageName}' range from '${versionRange}' target: ${versionMsg}`)
-    await Promise.all(versionDirs.map(vd => fs.rm(vd.path, { recursive: true, force: true })))
-    this.logger.info(`Uninstalled package '${packageName}'.`)
-    return true
+      const versionMsg = versionDirs.map(vd => vd.version).join(', ')
+      this.logger.info(`Uninstalling '${packageName}' range from '${versionRange}' target: ${versionMsg}`)
+      await Promise.all(versionDirs.map(vd => fs.rm(vd.path, { recursive: true, force: true })))
+      this.logger.info(`Uninstalled package '${packageName}'.`)
+      return true
+    })
   }
 
   /**
@@ -305,8 +313,10 @@ class NodeService extends Service {
    * @returns Fulfills with whether the package is installed
    */
   async has(packageName: string, versionRange: string = '*'): Promise<boolean> {
-    const versionDirs = await this.listVersionDirs(packageName)
-    return versionDirs.some(vd => satisfies(vd.version, versionRange, { loose: true, includePrerelease: true }))
+    return this.rmLock.r(async () => {
+      const versionDirs = await this.listVersionDirs(packageName)
+      return versionDirs.some(vd => satisfies(vd.version, versionRange, { loose: true, includePrerelease: true }))
+    })
   }
 
   /**
@@ -317,43 +327,45 @@ class NodeService extends Service {
    * @return Fulfills with the imported package
    */
   async import<T>(packageName: string, options: ImportOptions = {}): Promise<T> {
-    const { allowInstall = true, useRequire = false, version = 'latest' } = options
+    return this.rmLock.r(async () => {
+      const { allowInstall = true, useRequire = false, version = 'latest' } = options
 
-    let targetVersion = await this.selectInstalledVersion(packageName, version, true)
+      let targetVersion = await this.selectInstalledVersion(packageName, version, true)
 
-    if (! targetVersion) {
-      if (allowInstall) {
-        targetVersion = await this.install(packageName, version)
+      if (! targetVersion) {
+        if (allowInstall) {
+          targetVersion = await this.install(packageName, version)
+        }
+        else {
+          this.logger.error(`Package not installed: ${packageName}@${version}`)
+          return null
+        }
+      }
+
+      const packageDir = this.buildPackageDir(packageName, targetVersion)
+
+      let packageObject: T = null
+
+      if (useRequire) {
+        packageObject = require(packageDir) as T
       }
       else {
-        this.logger.error(`Package not installed: ${packageName}@${version}`)
-        return null
+        const packageHref = url.pathToFileURL(packageDir).href
+        const packageRequire = module.createRequire(packageHref)
+        const packageEntry = packageRequire.resolve(packageName)
+        const packageEntryHref = url.pathToFileURL(packageEntry).href
+        if (packageEntryHref.startsWith(packageHref)) {
+          packageObject = await import(packageEntryHref) as T
+        }
       }
-    }
 
-    const packageDir = this.buildPackageDir(packageName, targetVersion)
-
-    let packageObject: T = null
-
-    if (useRequire) {
-      packageObject = require(packageDir) as T
-    }
-    else {
-      const packageHref = url.pathToFileURL(packageDir).href
-      const packageRequire = module.createRequire(packageHref)
-      const packageEntry = packageRequire.resolve(packageName)
-      const packageEntryHref = url.pathToFileURL(packageEntry).href
-      if (packageEntryHref.startsWith(packageHref)) {
-        packageObject = await import(packageEntryHref) as T
+      if (packageObject !== null) {
+        const now = new Date()
+        await fs.utimes(this.buildPackageRootDir(packageName, targetVersion), now, now)
       }
-    }
 
-    if (packageObject !== null) {
-      const now = new Date()
-      await fs.utimes(this.buildPackageRootDir(packageName, targetVersion), now, now)
-    }
-
-    return packageObject
+      return packageObject
+    })
   }
 
   /**
@@ -367,38 +379,40 @@ class NodeService extends Service {
    * Remove unaccessed package
    * @param idleTimeout Package that remain unaccessed for this duration will be removed, in milliseconds
    */
-  async removeUnaccessed(idleTimeout: number) {
-    if (! (await exists(this.config.packagePath))) {
-      return []
-    }
-    let files = await fs.readdir(this.config.packagePath, {
-      withFileTypes: true,
+  async removeUnaccessed(idleTimeout: number): Promise<any[]> {
+    return this.rmLock.w(async () => {
+      if (! (await exists(this.config.packagePath))) {
+        return []
+      }
+      let files = await fs.readdir(this.config.packagePath, {
+        withFileTypes: true,
+      })
+      files = files
+        .filter(file => file.isDirectory())
+      const now = Date.now()
+      const rmPaths: string[] = []
+      for (const file of files) {
+        const dirPath = path.join(file.parentPath, file.name)
+        const stat = await fs.stat(dirPath)
+        if (now - stat.mtimeMs > idleTimeout) {
+          rmPaths.push(dirPath)
+        }
+      }
+      if (! rmPaths.length) {
+        return
+      }
+      const results = await Promise.allSettled(rmPaths.map(path => fs.rm(path, { recursive: true, force: true })))
+      let removedCount = 0
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          removedCount += 1
+        }
+        else {
+          this.logger.warn(`Failed to remove idle package '${rmPaths[index]}': %o`, result.reason)
+        }
+      })
+      this.logger.info(`Removed ${removedCount} idle package(s).`)
     })
-    files = files
-      .filter(file => file.isDirectory())
-    const now = Date.now()
-    const rmPaths: string[] = []
-    for (const file of files) {
-      const dirPath = path.join(file.parentPath, file.name)
-      const stat = await fs.stat(dirPath)
-      if (now - stat.mtimeMs > idleTimeout) {
-        rmPaths.push(dirPath)
-      }
-    }
-    if (! rmPaths.length) {
-      return
-    }
-    const results = await Promise.allSettled(rmPaths.map(path => fs.rm(path, { recursive: true, force: true })))
-    let removedCount = 0
-    results.forEach((result, index) => {
-      if (result.status === 'fulfilled') {
-        removedCount += 1
-      }
-      else {
-        this.logger.warn(`Failed to remove idle package '${rmPaths[index]}': %o`, result.reason)
-      }
-    })
-    this.logger.info(`Removed ${removedCount} idle package(s).`)
   }
 }
 

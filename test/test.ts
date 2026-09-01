@@ -1,4 +1,4 @@
-import { it, before, after } from 'node:test'
+import { it, before, after, skip } from 'node:test'
 import { setTimeout as wait } from 'node:timers/promises'
 import assert from 'node:assert/strict'
 
@@ -8,6 +8,7 @@ import Http from '@cordisjs/plugin-http'
 import NodeService from '../src'
 
 import * as semver from 'semver'
+import { ReadWriteLock } from '../src/utils'
 
 const app = new Context()
 
@@ -23,6 +24,46 @@ after(async () => {
 })
 
 const p = 'semver'
+
+skip('ReadWriteLock', async () => {
+  const l = []
+  const lock = new ReadWriteLock()
+  const startTime = Date.now()
+  let wStartTime: number
+  let rStartTime: number
+  void lock.r(async () => {
+    await wait(300)
+  })
+  void lock.r(async () => {
+    await wait(300)
+  })
+  await lock.r(async () => {
+    await wait(300)
+  })
+  void lock.w(async () => {
+    wStartTime = Date.now()
+    await wait(300)
+    l.push(Date.now())
+  })
+  void lock.w(async () => {
+    await wait(100)
+    l.push(Date.now())
+  })
+  void lock.w(async () => {
+    await wait(200)
+    l.push(Date.now())
+  })
+  await lock.r(async () => {
+    rStartTime = Date.now()
+    const ll = [...l]
+    ll.sort()
+    assert.ok(l.length === 3)
+    assert.ok(JSON.stringify(l) === JSON.stringify(ll))
+  })
+  assert.ok(wStartTime - startTime < 320)
+  assert.ok(rStartTime - startTime > (300 + 300 + 100 + 200))
+})
+
 it('w-node service', async (t) => {
   await t.test('install', async () => {
     const v = await app.node.install(p)
@@ -116,4 +157,11 @@ it('w-node clean', async () => {
   await app.node.remove(p)
   assert.ok(res6)
   assert.ok(! res7)
+})
+
+it('w-node ReadWriteLock', async () => {
+  await app.node.install(p)
+  const promise = app.node.remove(p)
+  assert.ok(! (await app.node.has(p)))
+  assert.ok(await promise)
 })
