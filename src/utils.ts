@@ -71,8 +71,8 @@ export class ReadWriteLock {
       this.writing = new Promise(resolve => this.writingRes = resolve)
     }
     else {
-      let res: (value: unknown) => void
-      const lock = new Promise(resolve => res = resolve)
+      let res: (value: (PromiseLike<void> | void)) => void
+      const lock = new Promise<void>(resolve => res = resolve)
       this.writeQueue.push(res)
       await lock
     }
