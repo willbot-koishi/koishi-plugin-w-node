@@ -165,3 +165,12 @@ it('w-node ReadWriteLock', async () => {
   assert.ok(! (await app.node.has(p)))
   assert.ok(await promise)
 })
+
+it('w-node install concurrent', async () => {
+  const tasks = []
+  for (let i = 0; i < 30; i ++) {
+    tasks.push(app.node.install(p, '7.8.5'))
+  }
+  await Promise.all(tasks)
+  await app.node.remove(p, '7.8.5')
+})

@@ -33,6 +33,46 @@ export namespace PackageInfo {
 
 export const VERSION_SYMBOL = '@'
 
+export async function deepForEach(
+  obj: any,
+  fn: (
+    value: any,
+    key: string,
+    obj: any,
+    parentPath: string[],
+    root: any,
+  ) => Promise<void | false> | void | false,
+  {
+    onObject = true,
+    onValue = true,
+    parentPath = [] as string[],
+    root = obj,
+  } = {},
+) {
+  for (const [key, value] of Object.entries(obj)) {
+    if (typeof value === 'object' && value !== null) {
+      if (onObject) {
+        if (await fn(value, key, obj, parentPath, root) === false) {
+          return false
+        }
+      }
+      if (await deepForEach(value, fn, {
+        onObject,
+        onValue,
+        parentPath: [...parentPath, key],
+        root,
+      }) === false) {
+        return false
+      }
+    }
+    else if (onValue) {
+      if (await fn(value, key, obj, parentPath, root) === false) {
+        return false
+      }
+    }
+  }
+}
+
 export class ReadWriteLock {
   private readMap: Record<symbol, true> = {}
   private reading: Promise<void> = null
@@ -88,6 +128,44 @@ export class ReadWriteLock {
       else {
         this.writeQueue.shift()()
       }
+    }
+  }
+}
+
+export namespace Locks {
+  const coalescePool = {}
+  export async function coalesce(
+    key: string | symbol,
+    fn?: () => any | Promise<any>,
+  ) {
+    const lockObj = (coalescePool[key] ||= {
+      lock: null,
+      resolve: null,
+      reject: null,
+    })
+
+    if (! fn || lockObj.lock) {
+      return lockObj.lock
+    }
+
+    lockObj.lock = new Promise((resolve, reject) => {
+      lockObj.resolve = resolve
+      lockObj.reject = reject
+    })
+    try {
+      const res = await fn()
+      lockObj.resolve(res)
+      return res
+    }
+    catch (e) {
+      lockObj.reject(e)
+      throw e
+    }
+    finally {
+      delete lockObj.lock
+      delete lockObj.resolve
+      delete lockObj.reject
+      delete coalescePool[key]
     }
   }
 }
