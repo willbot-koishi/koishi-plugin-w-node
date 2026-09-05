@@ -10,7 +10,7 @@ import satisfies from 'semver/functions/satisfies'
 
 import { Context, z, Service } from 'koishi'
 
-import { exists, PackageInfo, ReadWriteLock, VERSION_SYMBOL } from './utils'
+import { deepForEach, exists, Locks, PackageInfo, ReadWriteLock, VERSION_SYMBOL } from './utils'
 import enUS from './locales/en-US.yml'
 import zhCN from './locales/zh-CN.yml'
 
@@ -127,15 +127,13 @@ class NodeService extends Service {
 
   async getRegistry(): Promise<string> {
     let marketRegistry: string
-    for (const group of Object.values(this.ctx.root.config?.plugins || {})) {
-      const market = Object.entries(group).find(e =>
-        e[0]?.startsWith?.('market:'),
-      )
-      if (market) {
-        marketRegistry = market[1]?.['registry']?.['endpoint']
-        break
+    await deepForEach(this.ctx.root.config?.plugins || {}, (value, key) => {
+      if (! key.startsWith?.('market:')) {
+        return
       }
-    }
+      marketRegistry = value?.['registry']?.['endpoint']
+      return false
+    }, { onValue: false })
     return marketRegistry ?? await getPMRegistry()
   }
 
@@ -272,7 +270,9 @@ class NodeService extends Service {
       const packageStr = `${packageName}@${targetVersion}`
       this.logger.info(`Installing '${packageStr}'...`)
       try {
-        await this.execa({ cwd: rootDir })`npm add ${packageStr} --color always --registry ${this.config.registry}`
+        await Locks.coalesce(packageStr, async () => {
+          await this.execa({ cwd: rootDir })`npm add ${packageStr} --color always --registry ${this.config.registry}`
+        })
         this.logger.info(`Installed package '${packageStr}'.`)
         return targetVersion
       }
