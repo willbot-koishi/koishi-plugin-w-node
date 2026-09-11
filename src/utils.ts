@@ -132,40 +132,25 @@ export class ReadWriteLock {
   }
 }
 
-export namespace Locks {
-  const coalescePool = {}
-  export async function coalesce(
-    key: string | symbol,
-    fn?: () => any | Promise<any>,
-  ) {
-    const lockObj = (coalescePool[key] ||= {
-      lock: null,
-      resolve: null,
-      reject: null,
-    })
+type CoalesceKey = string | symbol
 
-    if (! fn || lockObj.lock) {
-      return lockObj.lock
+export const useCoalescer = () => {
+  const pool = new Map<CoalesceKey, Promise<unknown>>()
+
+  function coalesce<T>(
+    key: CoalesceKey,
+    task: () => T | PromiseLike<T>,
+  ): Promise<T> {
+    if (pool.has(key)) {
+      return pool.get(key) as Promise<T>
     }
 
-    lockObj.lock = new Promise((resolve, reject) => {
-      lockObj.resolve = resolve
-      lockObj.reject = reject
-    })
-    try {
-      const res = await fn()
-      lockObj.resolve(res)
-      return res
-    }
-    catch (e) {
-      lockObj.reject(e)
-      throw e
-    }
-    finally {
-      delete lockObj.lock
-      delete lockObj.resolve
-      delete lockObj.reject
-      delete coalescePool[key]
-    }
+    const promise = Promise.resolve()
+      .then(task)
+      .finally(() => pool.delete(key))
+    pool.set(key, promise)
+    return promise
   }
+
+  return coalesce
 }

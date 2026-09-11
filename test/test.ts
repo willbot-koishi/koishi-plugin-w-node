@@ -1,6 +1,9 @@
 import { it, before, after, skip } from 'node:test'
 import { setTimeout as wait } from 'node:timers/promises'
 import assert from 'node:assert/strict'
+import path from 'node:path'
+import os from 'node:os'
+import fs from 'node:fs/promises'
 
 import { Context, type Plugin } from 'koishi'
 import Mock from '@koishijs/plugin-mock'
@@ -167,10 +170,61 @@ it('w-node ReadWriteLock', async () => {
 })
 
 it('w-node install concurrent', async () => {
-  const tasks = []
-  for (let i = 0; i < 30; i ++) {
-    tasks.push(app.node.install(p, '7.8.5'))
+  const service = app.node as any
+  const originalPackagePath = service.config.packagePath
+  const originalExecaPackage = service.execaPackage
+  const packagePath = await fs.mkdtemp(path.resolve(os.tmpdir(), 'w-node-'))
+
+  let viewCount = 0
+  let installCount = 0
+  let releaseInstall: () => void
+  let notifyInstallStarted: () => void
+  const installGate = new Promise<void>(resolve => releaseInstall = resolve)
+  const installStarted = new Promise<void>(resolve => notifyInstallStarted = resolve)
+
+  service.config.packagePath = packagePath
+  service.execaPackage = {
+    execa: (first: any) => {
+      if (Array.isArray(first)) {
+        viewCount += 1
+        return Promise.resolve({ stdout: JSON.stringify('7.8.5') })
+      }
+
+      return ({ cwd }: { cwd: string }) => async () => {
+        installCount += 1
+        notifyInstallStarted()
+        await installGate
+        const packageDir = path.resolve(cwd, 'node_modules', p)
+        await fs.mkdir(packageDir, { recursive: true })
+        await fs.writeFile(path.resolve(packageDir, 'package.json'), '{}')
+      }
+    },
   }
-  await Promise.all(tasks)
-  await app.node.remove(p, '7.8.5')
+
+  const tasks = [
+    ...Array.from({ length: 15 }, () => app.node.install(p)),
+    ...Array.from({ length: 15 }, () => app.node.install(p, '7.8.5')),
+  ]
+
+  try {
+    await installStarted
+
+    // The staging directory must not be reported as an installed package.
+    assert.equal(await app.node.has(p, '7.8.5'), false)
+    assert.equal(await app.node.import(p, { version: '7.8.5', allowInstall: false }), null)
+
+    releaseInstall()
+    const versions = await Promise.all(tasks)
+    assert.deepEqual(new Set(versions), new Set(['7.8.5']))
+    assert.equal(viewCount, 2)
+    assert.equal(installCount, 1)
+    assert.equal(await app.node.has(p, '7.8.5'), true)
+  }
+  finally {
+    releaseInstall()
+    await Promise.allSettled(tasks)
+    service.config.packagePath = originalPackagePath
+    service.execaPackage = originalExecaPackage
+    await fs.rm(packagePath, { recursive: true, force: true })
+  }
 })

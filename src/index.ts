@@ -10,9 +10,11 @@ import satisfies from 'semver/functions/satisfies'
 
 import { Context, z, Service } from 'koishi'
 
-import { deepForEach, exists, Locks, PackageInfo, ReadWriteLock, VERSION_SYMBOL } from './utils'
+import { deepForEach, exists, PackageInfo, ReadWriteLock, useCoalescer, VERSION_SYMBOL } from './utils'
 import enUS from './locales/en-US.yml'
 import zhCN from './locales/zh-CN.yml'
+
+const INSTALLING_DIRECTORY = '.installing'
 
 declare module 'koishi' {
   interface Context {
@@ -51,7 +53,7 @@ class NodeService extends Service {
         const dir = this.config.packagePath
         if (! (await exists(dir))) return session.text('.package-not-exist')
         const infoStrs = (await fs.readdir(dir, { withFileTypes: true }))
-          .filter(entry => entry.isDirectory())
+          .filter(entry => entry.isDirectory() && entry.name !== INSTALLING_DIRECTORY)
           .map((dir): PackageInfo => {
             const index = dir.name.lastIndexOf(VERSION_SYMBOL)
             const name = dir.name.slice(0, index)
@@ -124,6 +126,7 @@ class NodeService extends Service {
 
   logger = this.ctx.logger('w-node')
   rmLock = new ReadWriteLock()
+  coalesceInstall = useCoalescer()
 
   async getRegistry(): Promise<string> {
     let marketRegistry: string
@@ -241,45 +244,71 @@ class NodeService extends Service {
    * @return package installed version
    */
   async install(packageName: string, version: string | 'latest' = 'latest'): Promise<string> {
-    return this.rmLock.r(async () => {
-      let versions: string[]
-      try {
-        const res = (await this.execaPackage.execa`npm view ${packageName}@${version} version --json --registry ${this.config.registry}`)
-        versions = JSON.parse(res.stdout)
-        if (typeof versions === 'string') {
-          versions = [versions]
+    return this.rmLock.r(() => {
+      const requestKey = `request:${packageName}@${version}`
+      return this.coalesceInstall(requestKey, async () => {
+        let versions: string[]
+        try {
+          const res = (await this.execaPackage.execa`npm view ${packageName}@${version} version --json --registry ${this.config.registry}`)
+          versions = JSON.parse(res.stdout)
+          if (typeof versions === 'string') {
+            versions = [versions]
+          }
         }
-      }
-      catch (err) {
-        this.logger.error(err)
-        return null
-      }
+        catch (err) {
+          this.logger.error(err)
+          return null
+        }
 
-      const targetVersion = maxSatisfying(versions, '*', { loose: true, includePrerelease: true })?.toString()
-      if (! targetVersion) {
-        this.logger.error(`Invalid version: ${version}`)
-        return null
-      }
+        const targetVersion = maxSatisfying(versions, '*', { loose: true, includePrerelease: true })?.toString()
+        if (! targetVersion) {
+          this.logger.error(`Invalid version: ${version}`)
+          return null
+        }
 
-      const rootDir = this.buildPackageRootDir(packageName, targetVersion)
+        const rootDir = this.buildPackageRootDir(packageName, targetVersion)
+        const packageDir = this.buildPackageDir(packageName, targetVersion)
+        const packageStr = `${packageName}@${targetVersion}`
 
-      this.logger.info(`Making directory '${rootDir}'.`)
-      await fs.mkdir(rootDir, { recursive: true })
-      await fs.writeFile(path.resolve(rootDir, 'package.json'), '{}')
+        return this.coalesceInstall(`target:${packageStr}`, async () => {
+          // Exact versions are immutable. A completed target needs no reinstall.
+          if (await exists(path.resolve(packageDir, 'package.json'))) {
+            return targetVersion
+          }
 
-      const packageStr = `${packageName}@${targetVersion}`
-      this.logger.info(`Installing '${packageStr}'...`)
-      try {
-        await Locks.coalesce(packageStr, async () => {
-          await this.execa({ cwd: rootDir })`npm add ${packageStr} --color always --registry ${this.config.registry}`
+          // Clear remnants of an interrupted legacy installation before
+          // starting. The final path stays absent until the atomic publish.
+          await fs.rm(rootDir, { recursive: true, force: true })
+
+          // Install beside the final directory, so readers never observe a
+          // partially populated package. rename() publishes it atomically.
+          const stagingRoot = path.resolve(this.config.packagePath, INSTALLING_DIRECTORY)
+          await fs.mkdir(stagingRoot, { recursive: true })
+          const stagingDir = await fs.mkdtemp(path.resolve(
+            stagingRoot,
+            `${this.escapePackageName(packageName)}${VERSION_SYMBOL}${targetVersion}-`,
+          ))
+
+          try {
+            await fs.writeFile(path.resolve(stagingDir, 'package.json'), '{}')
+            this.logger.info(`Installing '${packageStr}'...`)
+            await this.execa({ cwd: stagingDir })`npm add ${packageStr} --color always --registry ${this.config.registry}`
+
+            await fs.rename(stagingDir, rootDir)
+            this.logger.info(`Installed package '${packageStr}'.`)
+            return targetVersion
+          }
+          catch (err) {
+            try {
+              await fs.rm(stagingDir, { recursive: true, force: true })
+            }
+            catch (cleanupError) {
+              this.logger.warn(`Failed to clean up installation directory '${stagingDir}': %o`, cleanupError)
+            }
+            throw err
+          }
         })
-        this.logger.info(`Installed package '${packageStr}'.`)
-        return targetVersion
-      }
-      catch (e) {
-        await fs.rm(rootDir, { recursive: true, force: true })
-        throw e
-      }
+      })
     })
   }
 
@@ -383,6 +412,15 @@ class NodeService extends Service {
     return this.rmLock.w(async () => {
       if (! (await exists(this.config.packagePath))) {
         return []
+      }
+      // No installation can be active while holding the write lock. Remove
+      // empty or abandoned staging directories without counting them as packages.
+      const stagingRoot = path.resolve(this.config.packagePath, INSTALLING_DIRECTORY)
+      try {
+        await fs.rm(stagingRoot, { recursive: true, force: true })
+      }
+      catch (err) {
+        this.logger.warn(`Failed to clean up installation staging directory '${stagingRoot}': %o`, err)
       }
       let files = await fs.readdir(this.config.packagePath, {
         withFileTypes: true,
