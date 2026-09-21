@@ -379,10 +379,14 @@ class NodeService extends Service {
         packageObject = require(packageDir) as T
       }
       else {
-        const packageHref = url.pathToFileURL(packageDir).href
-        const packageRequire = module.createRequire(packageHref)
+        // Resolve from the npm project that owns node_modules. Resolving a
+        // package by its own name from inside its directory is sensitive to
+        // Node's lookup state when the package was installed at runtime.
+        const packageRoot = this.buildPackageRootDir(packageName, targetVersion)
+        const packageRequire = module.createRequire(path.resolve(packageRoot, 'package.json'))
         const packageEntry = packageRequire.resolve(packageName)
         const packageEntryHref = url.pathToFileURL(packageEntry).href
+        const packageHref = url.pathToFileURL(packageDir + path.sep).href
         if (packageEntryHref.startsWith(packageHref)) {
           packageObject = await import(packageEntryHref) as T
         }

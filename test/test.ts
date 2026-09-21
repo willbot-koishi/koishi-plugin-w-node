@@ -228,3 +228,43 @@ it('w-node install concurrent', async () => {
     await fs.rm(packagePath, { recursive: true, force: true })
   }
 })
+
+it('w-node imports a scoped package from its installation root', async () => {
+  const packagePath = await fs.mkdtemp(path.resolve(os.tmpdir(), 'w-node-'))
+  const packageName = '@scope/runtime-package'
+  const version = '1.0.0'
+  const isolatedApp = new Context()
+  isolatedApp.plugin(NodeService, {
+    packagePath,
+    packageIdleTimeout: 7,
+    registry: 'https://registry.npmjs.org',
+  })
+
+  try {
+    await isolatedApp.start()
+    const service = isolatedApp.node as any
+    const rootDir = service.buildPackageRootDir(packageName, version)
+    const packageDir = service.buildPackageDir(packageName, version)
+    await fs.mkdir(packageDir, { recursive: true })
+    await fs.writeFile(path.resolve(rootDir, 'package.json'), JSON.stringify({
+      dependencies: { [packageName]: version },
+    }))
+    await fs.writeFile(path.resolve(packageDir, 'package.json'), JSON.stringify({
+      name: packageName,
+      version,
+      type: 'module',
+      exports: './index.js',
+    }))
+    await fs.writeFile(path.resolve(packageDir, 'index.js'), 'export const value = 42\n')
+
+    const pkg = await isolatedApp.node.import<{ value: number }>(packageName, {
+      allowInstall: false,
+      version,
+    })
+    assert.equal(pkg.value, 42)
+  }
+  finally {
+    await isolatedApp.stop()
+    await fs.rm(packagePath, { recursive: true, force: true })
+  }
+})
